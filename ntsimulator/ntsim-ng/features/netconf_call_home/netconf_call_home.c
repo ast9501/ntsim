@@ -30,7 +30,22 @@
 #include "core/framework.h"
 #include "core/xpath.h"
 
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <netinet/in.h>
+#include <net/if.h>
+#include <net/if_arp.h>
+#include <arpa/inet.h>
+#include <errno.h>
+
+#define ETH_NAME "eth0" //get specific interface ip addr
+
+
+
 #define NETCONF_CALLHOME_CURL_SEND_PAYLOAD_FORMAT   "{\"odl-netconf-callhome-server:device\":[{\"odl-netconf-callhome-server:unique-id\":\"%s\",\"odl-netconf-callhome-server:ssh-host-key\":\"%s\",\"odl-netconf-callhome-server:credentials\":{\"odl-netconf-callhome-server:username\":\"netconf\",\"odl-netconf-callhome-server:passwords\":[\"netconf!\"]}}]}"
+
+# define ONOS_CALLHOME_PAYLOAD_FORMAT "{\"device\":{\"netconf:%s\":{\"netconf\": {\"ip\": \"%s\",\"port\": 830, \"username\": \"netconf\", \"password\": \"netconf!\"}}, \"basic\": {\"driver\": \"ovs-netconf\"}}}"
+
 
 static int create_ssh_callhome_endpoint(sr_session_ctx_t *current_session, struct lyd_node *netconf_node);
 static int create_tls_callhome_endpoint(sr_session_ctx_t *current_session, struct lyd_node *netconf_node);
@@ -219,6 +234,33 @@ static int create_tls_callhome_endpoint(sr_session_ctx_t *current_session, struc
     return NTS_ERR_OK;
 }
 
+char* getIp(){
+    int sock;
+    struct sockaddr_in sin;
+    struct ifreq ifr;
+
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock == -1){
+        perror("socket");
+        return -1;
+    }
+
+    strncpy(ifr.ifr_name, ETH_NAME, IFNAMSIZ);
+    ifr.ifr_name[IFNAMSIZ - 1] = 0;
+
+    if (ioctl(sock, SIOCGIFADDR, &ifr) < 0){
+        perror("ioctl");
+        return -1;
+    }
+
+    memcpy(&sin, &ifr.ifr_addr, sizeof(sin));
+    //fprintf(stdout, "eth0: %s\n", inet_ntoa(sin.sin_addr));
+
+    char *result = inet_ntoa(sin.sin_addr);
+    //printf(result);
+    return result;
+}
+
 
 static int send_odl_callhome_configuration(sr_session_ctx_t *current_session) {
     assert(current_session);
@@ -235,13 +277,16 @@ static int send_odl_callhome_configuration(sr_session_ctx_t *current_session) {
     ssh_key_string[strlen(ssh_key_string) - 1] = 0; // trim the newline character
 
     // checkAS we have hardcoded here the username and password of the NETCONF Server
+    /*
     char *odl_callhome_payload = 0;
     asprintf(&odl_callhome_payload, NETCONF_CALLHOME_CURL_SEND_PAYLOAD_FORMAT, framework_environment.settings.hostname, ssh_key_string);
+    
     free(public_ssh_key);
     if(odl_callhome_payload == 0) {
         log_error("bad asprintf\n");
         return NTS_ERR_FAILED;
     }
+    */
 
     controller_details_t *controller = controller_details_get(current_session);
     if(controller == 0) {
@@ -249,22 +294,34 @@ static int send_odl_callhome_configuration(sr_session_ctx_t *current_session) {
         return NTS_ERR_FAILED;
     }
     
+    char *hostIp = getIp();
+    char *onos_callhome_payload = 0;
+    asprintf(&onos_callhome_payload, ONOS_CALLHOME_PAYLOAD_FORMAT, hostIp, hostIp);
+    free(public_ssh_key);
+    if(onos_callhome_payload == 0) {
+        log_error("bad asprintf\n");
+        return NTS_ERR_FAILED;
+    }
+
     char *url = 0;
-    asprintf(&url, "%s/rests/data/odl-netconf-callhome-server:netconf-callhome-server/allowed-devices/device=%s", controller->base_url, framework_environment.settings.hostname);
+    //asprintf(&url, "%s/rests/data/odl-netconf-callhome-server:netconf-callhome-server/allowed-devices/device=%s", controller->base_url, framework_environment.settings.hostname);
+    //asprintf(&url, "%s/onos/v1/network/configuration", controller->base_url);
+    asprintf(&url, "%s/onos/v1/network/configuration", "192.168.0.110:8181");
     if(url == 0) {
         log_error("bad asprintf\n");
         controller_details_free(controller);
         return NTS_ERR_FAILED;
     }
 
-    int rc = http_request(url, controller->username, controller->password, "PUT", odl_callhome_payload, 0, 0);
+    //int rc = http_request(url, controller->username, controller->password, "PUT", odl_callhome_payload, 0, 0);
+    int rc = http_request(url, controller->username, controller->password, "POST", onos_callhome_payload, 0, 0);
     if(rc != NTS_ERR_OK) {
         log_error("http_request failed\n");
     }
     
     free(url);
     controller_details_free(controller);
-    free(odl_callhome_payload);
+    free(onos_callhome_payload);
 
     return rc;
 }
