@@ -38,18 +38,23 @@
 #include <arpa/inet.h>
 #include <errno.h>
 
-#define ETH_NAME "eth0" //get specific interface ip addr
+#define ETH_NAME "eth0" // define network interface for netconf client to connect
 
 
-
+// odl callhome payload format
 #define NETCONF_CALLHOME_CURL_SEND_PAYLOAD_FORMAT   "{\"odl-netconf-callhome-server:device\":[{\"odl-netconf-callhome-server:unique-id\":\"%s\",\"odl-netconf-callhome-server:ssh-host-key\":\"%s\",\"odl-netconf-callhome-server:credentials\":{\"odl-netconf-callhome-server:username\":\"netconf\",\"odl-netconf-callhome-server:passwords\":[\"netconf!\"]}}]}"
 
-# define ONOS_CALLHOME_PAYLOAD_FORMAT "{\"device\":{\"netconf:%s\":{\"netconf\": {\"ip\": \"%s\",\"port\": 830, \"username\": \"netconf\", \"password\": \"netconf!\"}}, \"basic\": {\"driver\": \"ovs-netconf\"}}}"
 
+// onos callhome payload format
+#define ONOS_CALLHOME_PAYLOAD_FORMAT "{\"devices\": {\"netconf:%s\": {\"netconf\": {\"ip\": \"%s\",\"port\": 830,\"username\":\"netconf\",\"password\": \"netconf!\"},\"basic\": {\"driver\": \"ovs-netconf\"}}}}"
+
+/*
+# define ONOS_CALLHOME_PAYLOAD_FORMAT "{\"device\":{\"netconf:%s\":{\"netconf\": {\"ip\": \"%s\",\"port\": 830, \"username\": \"netconf\", \"password\": \"netconf!\"}}, \"basic\": {\"driver\": \"ovs-netconf\"}}}"
+*/
 
 static int create_ssh_callhome_endpoint(sr_session_ctx_t *current_session, struct lyd_node *netconf_node);
 static int create_tls_callhome_endpoint(sr_session_ctx_t *current_session, struct lyd_node *netconf_node);
-static int send_odl_callhome_configuration(sr_session_ctx_t *current_session);
+static int send_callhome_configuration(sr_session_ctx_t *current_session);
 
 static int netconf_call_home_status = 0;
 
@@ -217,7 +222,7 @@ static int create_ssh_callhome_endpoint(sr_session_ctx_t *current_session, struc
         return NTS_ERR_FAILED;
     }
 
-    int rc = send_odl_callhome_configuration(current_session);
+    int rc = send_callhome_configuration(current_session);
     if(rc != NTS_ERR_OK) {
         log_add_verbose(2, "could not send ODL Call Home configuration.\n");
     }
@@ -234,6 +239,7 @@ static int create_tls_callhome_endpoint(sr_session_ctx_t *current_session, struc
     return NTS_ERR_OK;
 }
 
+// get ntsim-ng network interface IP
 char* getIp(){
     int sock;
     struct sockaddr_in sin;
@@ -262,7 +268,7 @@ char* getIp(){
 }
 
 
-static int send_odl_callhome_configuration(sr_session_ctx_t *current_session) {
+static int send_callhome_configuration(sr_session_ctx_t *current_session) {
     assert(current_session);
 
     char *public_ssh_key = read_key(SERVER_PUBLIC_SSH_KEY_PATH);
@@ -296,7 +302,16 @@ static int send_odl_callhome_configuration(sr_session_ctx_t *current_session) {
     
     char *hostIp = getIp();
     char *onos_callhome_payload = 0;
-    asprintf(&onos_callhome_payload, ONOS_CALLHOME_PAYLOAD_FORMAT, hostIp, hostIp);
+    
+    // build ONOS prototype format, device name
+    // <netconf server ip>:<port>
+    int deviceNameLen = strlen(hostIp) + strlen(":830") + 1;
+    char deviceName[deviceNameLen];
+    memset(deviceName, '\0', deviceNameLen);
+    strcat(deviceName, hostIp);
+    strcat(deviceName, ":830");
+    
+    asprintf(&onos_callhome_payload, ONOS_CALLHOME_PAYLOAD_FORMAT, deviceName, hostIp);
     free(public_ssh_key);
     if(onos_callhome_payload == 0) {
         log_error("bad asprintf\n");
@@ -305,8 +320,7 @@ static int send_odl_callhome_configuration(sr_session_ctx_t *current_session) {
 
     char *url = 0;
     //asprintf(&url, "%s/rests/data/odl-netconf-callhome-server:netconf-callhome-server/allowed-devices/device=%s", controller->base_url, framework_environment.settings.hostname);
-    //asprintf(&url, "%s/onos/v1/network/configuration", controller->base_url);
-    asprintf(&url, "%s/onos/v1/network/configuration", "192.168.0.110:8181");
+    asprintf(&url, "%s/onos/v1/network/configuration", controller->base_url);
     if(url == 0) {
         log_error("bad asprintf\n");
         controller_details_free(controller);
